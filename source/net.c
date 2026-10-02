@@ -7,6 +7,7 @@
 
 #include "net.h"
 #include "cJSON.h"
+#include "diag.h"
 
 void conv_init(Conversation *c) {
     memset(c, 0, sizeof(*c));
@@ -62,6 +63,39 @@ typedef struct {
 static Worker g_worker;
 static Thread g_thread;
 static bool g_thread_started = false;
+
+// ---------------------------------------------------------------
+// Lazy socket/curl init: the BSD service is only brought up when the
+// first request is sent, so startup never blocks on it. It is a local
+// service connect (fast), but keeping it off the boot path means a
+// socket-init failure or hang in an emulator can never freeze the UI.
+// ---------------------------------------------------------------
+
+static bool g_sock_ready = false;
+static bool g_sock_failed = false;
+
+static bool net_ensure_init(void) {
+    if (g_sock_ready) return true;
+    if (g_sock_failed) return false;
+    diag_log("net: socketInitializeDefault...");
+    Result rc = socketInitializeDefault();
+    if (R_FAILED(rc)) {
+        diag_log("net: socketInitializeDefault failed: 0x%x", rc);
+        g_sock_failed = true;
+        return false;
+    }
+    curl_global_init(CURL_GLOBAL_DEFAULT);
+    g_sock_ready = true;
+    diag_log("net: sockets + curl ready");
+    return true;
+}
+
+void net_close(void) {
+    if (g_sock_ready) {
+        socketExit();
+        g_sock_ready = false;
+    }
+}
 
 typedef struct {
     char *data;
@@ -216,7 +250,7 @@ static void worker_main(void *arg) {
     curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, xfer_cb);
     curl_easy_setopt(curl, CURLOPT_XFERINFODATA, w);
     curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, "claude-code-switch/0.1");
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, "claude-code-switch/0.2");
 
     CURLcode rc = curl_easy_perform(curl);
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &w->job->http_code);
@@ -256,6 +290,12 @@ bool net_send_async(NetJob *job, const Conversation *conv, const Settings *s) {
         return false;
 
     memset(job, 0, sizeof(*job));
+    if (!net_ensure_init()) {
+        snprintf(job->error, sizeof(job->error),
+                 "Network unavailable (socketInitialize failed)");
+        job->state = REQ_ERROR;
+        return false;
+    }
     memset(&g_worker, 0, sizeof(g_worker));
     g_worker.job = job;
     g_worker.settings = *s;

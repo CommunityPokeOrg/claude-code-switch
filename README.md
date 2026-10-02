@@ -5,13 +5,21 @@ Nintendo Switch homebrew client for Claude — a chat app that talks to the
 hacked Switch, built with devkitPro/libnx. Produces a `.nro` that runs under
 Atmosphère custom firmware.
 
-**v0.2.0** replaces the v0.1.x plain-terminal UI with a modern, touch-first
+**v0.2.1** replaces the v0.1.x plain-terminal UI with a modern, touch-first
 graphical interface in the style of the Homebrew Menu: chat bubbles, card
 layout, big touch targets, inertial scrolling, and a header/status bar —
-with full d-pad/stick/button navigation alongside touch. Rendering is SDL2 +
-SDL2_ttf (devkitPro portlibs) compositing into a software surface; the system
+with full d-pad/stick/button navigation alongside touch. Rendering is a
+custom software compositor (surfaces + SDL_ttf text) presented through the
+libnx `NWindow`/`Framebuffer` path — no GPU/EGL is used on-device. The system
 `swkbd` applet is used for text entry (native touch keyboard), and USB HID
 keyboards still work.
+
+> **v0.2.0 hung on the emulator "Launching..." screen**: the devkitPro SDL2
+> port forces `SDL_WINDOW_OPENGL` and creates an EGL/nouveau surface for
+> *every* window — GPU init can block forever under emulators. v0.2.1
+> presents via the native framebuffer instead (the same mechanism
+> `consoleInit` used in v0.1.0), mounts RomFS before font loading, and
+> writes a boot log to `sdmc:/config/claude-code-switch/debug.log`.
 
 This is a **chat client**: a working single-shot-per-turn client with the
 plumbing in place (TLS, conversation state, scrollback, keyboard input, SD-card
@@ -34,7 +42,8 @@ the drawing code, but not photographs of real hardware.
 
 ### Implemented
 
-- **Graphical chat UI** (SDL2 + SDL2_ttf, Inter font, 1280×720+):
+- **Graphical chat UI** (software compositor + SDL_ttf, Inter font,
+  1280×720+):
   rounded-corner chat bubbles (user right/accent, assistant left/card,
   system + error chips centered), per-sender labels, typing indicator,
   header bar with title + model chip + live status pill, icon buttons,
@@ -190,30 +199,36 @@ drawing/layout code, but the app has not been launched on a physical
 Switch under Atmosphère, and the Anthropic request path has not been
 exercised from a console. Known-risk areas to check on first hardware run:
 
-- SDL2 video init (`SDL_CreateWindow`/`SDL_CreateRenderer`) under hbmenu —
-  falls back to the software renderer if the accelerated one fails.
-- `swkbd` overlay compositing over the SDL surface.
-- libnx touch coordinate space vs. the SDL window size (clamped; should be
+- Framebuffer presentation (`nwindowGetDefault` + `framebufferCreate` +
+  `framebufferMakeLinear`) — same mechanism as libnx `consoleInit`.
+- `swkbd` overlay compositing over the app's framebuffer.
+- libnx touch coordinate space vs. the framebuffer size (clamped; should be
   1:1 at 1280×720 handheld and 1920×1080 docked).
 - USB keyboard detection timing (`hidGetKeyboardStates` first-frame
   deltas).
 - TLS handshake latency / CN+SAN handling via the Switch mbedTLS port.
-- Software composition + texture upload cost per frame in applet mode —
-  use full-RAM (title takeover) launch as noted above.
+- Software composition + linear framebuffer copy cost per frame in applet
+  mode — use full-RAM (title takeover) launch as noted above.
 
-Emulator status: Ryujinx/yuzu do not emulate `hid` USB keyboards, real
-touch events, or real network DNS faithfully for homebrew; they were not
-used.
+Emulator status: v0.2.0 was reported to hang on Eden's "Launching..."
+screen (SDL2's mandatory EGL/nouveau window init is the implicated path);
+v0.2.1 avoids GPU init entirely, and if startup still stalls the stage is
+recorded in `sdmc:/config/claude-code-switch/debug.log` (also streamed over
+nxlink). Ryujinx/yuzu do not emulate `hid` USB keyboards, real touch
+events, or real network DNS faithfully for homebrew; they were not used.
 
 ## Layout
 
 ```
 source/main.c      app loop, input plumbing (pad/touch/USB kbd), dispatch
-source/gfx.c       SDL2 drawing layer: surface compose, AA rounded rects,
-                   gradients, text via SDL_ttf, clipping
+source/gfx.c       drawing layer: software compose (AA rounded rects,
+                   gradients, SDL_ttf text, clipping) presented via libnx
+                   NWindow/Framebuffer on Switch, SDL2 renderer on desktop
+source/diag.c      boot log: stderr/nxlink + sdmc debug.log
 source/ui.c        chat + settings screens: bubbles, focus nav, touch,
                    inertial scroll, toasts, typing indicator
-source/net.c       curl worker thread, request/response, conversation store
+source/net.c       lazy socket init + curl worker thread, request/response,
+                   conversation store
 source/kbd.c       swkbd wrapper + USB HID keyboard polling
 source/settings.c  SD-card settings JSON
 source/cJSON.c     vendored cJSON v1.7.18 (MIT)

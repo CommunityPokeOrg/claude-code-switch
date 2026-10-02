@@ -5,6 +5,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef __SWITCH__
+#include <switch.h>
+#endif
+
+#include "diag.h"
 #include "gfx.h"
 
 #ifdef __SWITCH__
@@ -19,9 +24,14 @@
 #define FONT_CACHE_MAX 12
 #define CORNER_CACHE_MAX 8
 
+#ifdef __SWITCH__
+static NWindow      *g_nwin;
+static Framebuffer   g_fb;
+#else
 static SDL_Window   *g_win;
 static SDL_Renderer *g_ren;
 static SDL_Texture  *g_tex;
+#endif
 static SDL_Surface  *g_surf;     // ARGB8888 composition surface
 static uint32_t     *g_px;
 static int g_w, g_h, g_pitch;    // pitch in pixels
@@ -91,28 +101,73 @@ static uint8_t *get_corner(int r) {
 
 bool gfx_init(void) {
     SDL_SetMainReady();
-    if (SDL_Init(SDL_INIT_VIDEO) != 0) {
-        fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
-        return false;
-    }
-    if (TTF_Init() != 0) {
-        fprintf(stderr, "TTF_Init: %s\n", TTF_GetError());
-        return false;
-    }
 
 #ifdef __SWITCH__
-    Uint32 win_flags = SDL_WINDOW_FULLSCREEN;
-    int req_w = 0, req_h = 0;
+    // On the Switch SDL2 port every window is backed by EGL/nouveau -
+    // SDL_CreateWindow forces SDL_WINDOW_OPENGL and SWITCH_CreateWindow
+    // requires an EGL surface. GPU init can hang on emulators, so present
+    // through the libnx NWindow/Framebuffer path instead (same mechanism
+    // as libnx's consoleInit). SDL itself is only used for surfaces and
+    // SDL_ttf, so no video subsystem is initialized here.
+    if (SDL_Init(0) != 0) {
+        diag_log("gfx: SDL_Init(0) failed: %s", SDL_GetError());
+        return false;
+    }
+    diag_log("gfx: SDL_Init(0) ok (no video driver)");
+#else
+    if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+        diag_log("gfx: SDL_Init failed: %s", SDL_GetError());
+        return false;
+    }
+    diag_log("gfx: SDL_Init ok");
+#endif
+
+    if (TTF_Init() != 0) {
+        diag_log("gfx: TTF_Init failed: %s", TTF_GetError());
+        return false;
+    }
+    diag_log("gfx: TTF_Init ok");
+
+#ifdef __SWITCH__
+    g_nwin = nwindowGetDefault();
+    if (!g_nwin) {
+        diag_log("gfx: nwindowGetDefault failed");
+        return false;
+    }
+    diag_log("gfx: nwindow ok");
+
+    u32 w = 0, h = 0;
+    nwindowSetDimensions(g_nwin, 1280, 720); // best effort
+    nwindowGetDimensions(g_nwin, &w, &h);
+    if (w == 0 || h == 0) { w = 1280; h = 720; }
+    g_w = (int)w;
+    g_h = (int)h;
+    diag_log("gfx: display %ux%u", (unsigned)w, (unsigned)h);
+
+    // BGRA_8888 matches SDL_PIXELFORMAT_ARGB8888 byte order, so presenting
+    // is a straight row memcpy.
+    Result rc = framebufferCreate(&g_fb, g_nwin, w, h,
+                                  PIXEL_FORMAT_BGRA_8888, 2);
+    if (R_FAILED(rc)) {
+        diag_log("gfx: framebufferCreate failed: 0x%x", rc);
+        return false;
+    }
+    rc = framebufferMakeLinear(&g_fb);
+    if (R_FAILED(rc)) {
+        diag_log("gfx: framebufferMakeLinear failed: 0x%x", rc);
+        framebufferClose(&g_fb);
+        return false;
+    }
+    diag_log("gfx: framebuffer ok");
 #else
     Uint32 win_flags = 0;
     int req_w = 1280, req_h = 720;
-#endif
 
     g_win = SDL_CreateWindow("Claude Code Switch",
                              SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
                              req_w, req_h, win_flags);
     if (!g_win) {
-        fprintf(stderr, "SDL_CreateWindow: %s\n", SDL_GetError());
+        diag_log("gfx: SDL_CreateWindow failed: %s", SDL_GetError());
         return false;
     }
 
@@ -123,7 +178,7 @@ bool gfx_init(void) {
         g_ren = SDL_CreateRenderer(g_win, -1, SDL_RENDERER_SOFTWARE);
     }
     if (!g_ren) {
-        fprintf(stderr, "SDL_CreateRenderer: %s\n", SDL_GetError());
+        diag_log("gfx: SDL_CreateRenderer failed: %s", SDL_GetError());
         return false;
     }
 
@@ -134,26 +189,34 @@ bool gfx_init(void) {
     g_tex = SDL_CreateTexture(g_ren, SDL_PIXELFORMAT_ARGB8888,
                               SDL_TEXTUREACCESS_STREAMING, g_w, g_h);
     if (!g_tex) {
-        fprintf(stderr, "SDL_CreateTexture: %s\n", SDL_GetError());
+        diag_log("gfx: SDL_CreateTexture failed: %s", SDL_GetError());
         return false;
     }
+#endif
 
     g_surf = SDL_CreateRGBSurfaceWithFormat(0, g_w, g_h, 32,
                                           SDL_PIXELFORMAT_ARGB8888);
     if (!g_surf) {
-        fprintf(stderr, "SDL_CreateRGBSurface: %s\n", SDL_GetError());
+        diag_log("gfx: SDL_CreateRGBSurface failed: %s", SDL_GetError());
+#ifdef __SWITCH__
+        if (g_fb.has_init) framebufferClose(&g_fb);
+#endif
         return false;
     }
     g_px = (uint32_t *)g_surf->pixels;
     g_pitch = g_surf->pitch / 4;
     g_clip = (GfxRect){0, 0, g_w, g_h};
 
-    // Warm the font cache.
+    // Warm the font cache (requires romfs mounted by the caller).
     if (!get_font(GFX_FONT_REGULAR, 22)) {
-        fprintf(stderr, "font load failed: %s\n", TTF_GetError());
+        diag_log("gfx: font load failed: %s", TTF_GetError());
+#ifdef __SWITCH__
+        if (g_fb.has_init) framebufferClose(&g_fb);
+#endif
         return false;
     }
     get_font(GFX_FONT_SEMIBOLD, 22);
+    diag_log("gfx: fonts ok");
     return true;
 }
 
@@ -165,9 +228,13 @@ void gfx_quit(void) {
         free(g_corners[i].alpha);
     g_corner_count = 0;
     if (g_surf) SDL_FreeSurface(g_surf);
+#ifdef __SWITCH__
+    if (g_fb.has_init) framebufferClose(&g_fb);
+#else
     if (g_tex) SDL_DestroyTexture(g_tex);
     if (g_ren) SDL_DestroyRenderer(g_ren);
     if (g_win) SDL_DestroyWindow(g_win);
+#endif
     TTF_Quit();
     SDL_Quit();
 }
@@ -179,10 +246,23 @@ GfxSurface *gfx_frame_surface(void) { return (GfxSurface *)g_surf; }
 void gfx_begin(void) { g_clip = (GfxRect){0, 0, g_w, g_h}; }
 
 void gfx_present(void) {
+#ifdef __SWITCH__
+    u32 stride = 0;
+    u8 *dst = (u8 *)framebufferBegin(&g_fb, &stride);
+    if (dst) {
+        const u8 *src = (const u8 *)g_surf->pixels;
+        for (int y = 0; y < g_h; y++)
+            memcpy(dst + (size_t)y * stride,
+                   src + (size_t)y * g_surf->pitch,
+                   (size_t)g_w * 4);
+        framebufferEnd(&g_fb);
+    }
+#else
     SDL_UpdateTexture(g_tex, NULL, g_surf->pixels, g_surf->pitch);
     SDL_RenderClear(g_ren);
     SDL_RenderCopy(g_ren, g_tex, NULL, NULL);
     SDL_RenderPresent(g_ren);
+#endif
 }
 
 void gfx_clip(int x, int y, int w, int h) {

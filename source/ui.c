@@ -651,7 +651,7 @@ static void draw_settings(UiApp *u) {
                   settings_row_rect(0, w, h).w, 64};
     gfx_roundrect(ab.x, ab.y, ab.w, ab.h, 20, C_FIELD);
     gfx_text(ab.x + 22, ab.y + 12, GFX_FONT_SEMIBOLD, 15, C_FAINT,
-             "Claude Code Switch v0.2.0");
+             "Claude Code Switch v0.2.1");
     gfx_text(ab.x + 22, ab.y + 34, GFX_FONT_REGULAR, 15, C_FAINT,
              "sdmc:/config/claude-code-switch/settings.json");
 

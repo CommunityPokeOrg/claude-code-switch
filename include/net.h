@@ -51,3 +51,6 @@ void net_cancel(NetJob *job);
 // After consuming a finished job (DONE/ERROR/CANCELLED), wait for the thread
 // to fully exit and reset the job to REQ_IDLE.
 void net_finish(NetJob *job);
+
+// Tear down the socket service if it was lazily initialized.
+void net_close(void);

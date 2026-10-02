@@ -4,6 +4,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "diag.h"
 #include "gfx.h"
 #include "ui.h"
 #include "settings.h"
@@ -33,8 +34,9 @@ static bool send_message(const char *text) {
     conv_add(&g_conv, "user", text);
     ui_chat_add(&g_ui, UI_LINE_USER, text);
     if (!net_send_async(&g_job, &g_conv, &g_settings)) {
-        ui_chat_add(&g_ui, UI_LINE_ERROR,
-                    "Could not start request (busy?)");
+        ui_chat_add_fmt(&g_ui, UI_LINE_ERROR, "%s",
+                        g_job.error[0] ? g_job.error
+                                       : "Could not start request");
         conv_pop(&g_conv);
         return false;
     }
@@ -81,10 +83,19 @@ static uint32_t map_down(u64 d) {
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
 
+    diag_init();
+    diag_log("=== claude-code-switch v0.2.1 boot ===");
+
+    // RomFS holds the fonts gfx_init loads, so mount it first.
+    bool romfs_ok = R_SUCCEEDED(romfsInit());
+    diag_log("romfsInit: %s", romfs_ok ? "ok" : "FAILED");
+
+    diag_log("gfx_init...");
     if (!gfx_init()) {
+        diag_log("gfx_init failed - console fallback");
         // Fall back to the plain console so the failure is visible.
         consoleInit(NULL);
-        printf("UI init failed (SDL2/font). Press + to exit.\n");
+        printf("UI init failed (display/font). Press + to exit.\n");
         padConfigureInput(1, HidNpadStyleSet_NpadStandard);
         PadState pad;
         padInitializeDefault(&pad);
@@ -94,17 +105,22 @@ int main(int argc, char **argv) {
             consoleUpdate(NULL);
         }
         consoleExit(NULL);
+        if (romfs_ok) romfsExit();
+        diag_close();
         return 1;
     }
+    diag_log("gfx_init ok");
 
     padConfigureInput(1, HidNpadStyleSet_NpadStandard);
     PadState pad;
     padInitializeDefault(&pad);
+    hidInitializeTouchScreen();
 
-    bool net_ok = R_SUCCEEDED(socketInitializeDefault());
-    bool romfs_ok = R_SUCCEEDED(romfsInit());
-
+    // Networking is initialized lazily on first send (net_ensure_init in
+    // net.c) so the UI always reaches its first frame regardless of what
+    // socket setup does.
     kbd_init();
+    diag_log("inputs ready");
 
     settings_defaults(&g_settings);
     settings_load(&g_settings);
@@ -112,9 +128,6 @@ int main(int argc, char **argv) {
     ui_init(&g_ui);
     ui_set_context(&g_ui, g_settings.model, g_settings.api_key[0] != 0);
 
-    if (!net_ok)
-        ui_chat_add(&g_ui, UI_LINE_ERROR,
-                    "socketInitialize failed - networking unavailable.");
     if (!romfs_ok)
         ui_chat_add(&g_ui, UI_LINE_ERROR,
                     "romfsInit failed - TLS certificates unavailable.");
@@ -257,6 +270,7 @@ int main(int argc, char **argv) {
         svcSleepThread(1000 * 1000); // ~1ms; vsync paces the loop
     }
 
+    diag_log("main: exiting");
     if (net_poll(&g_job) == REQ_RUNNING) {
         net_cancel(&g_job);
         net_finish(&g_job);
@@ -265,7 +279,9 @@ int main(int argc, char **argv) {
     conv_free(&g_conv);
     ui_quit(&g_ui);
     if (romfs_ok) romfsExit();
-    if (net_ok) socketExit();
+    net_close();
     gfx_quit();
+    diag_log("main: clean shutdown");
+    diag_close();
     return 0;
 }

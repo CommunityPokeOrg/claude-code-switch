@@ -4,6 +4,6 @@
 set -e
 cd "$(dirname "$0")/../.."
 gcc -O2 -o /tmp/hostshot \
-    tools/hostshot/hostshot.c source/gfx.c source/ui.c source/settings.c source/cJSON.c \
+    tools/hostshot/hostshot.c source/gfx.c source/ui.c source/settings.c source/cJSON.c source/diag.c \
     -Iinclude $(sdl2-config --cflags) $(sdl2-config --libs) -lSDL2_ttf -lSDL2_image -lm
 SDL_VIDEODRIVER=dummy SDL_RENDER_DRIVER=software /tmp/hostshot "${1:-docs}"

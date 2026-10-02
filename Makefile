@@ -26,7 +26,7 @@ ROMFS		:=	romfs
 
 APP_TITLE	:=	Claude Code Switch
 APP_AUTHOR	:=	CommunityPoke
-APP_VERSION	:=	0.2.0
+APP_VERSION	:=	0.2.1
 
 #---------------------------------------------------------------------------------
 # options for code generation
