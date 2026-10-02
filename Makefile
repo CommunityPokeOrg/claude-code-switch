@@ -26,7 +26,7 @@ ROMFS		:=	romfs
 
 APP_TITLE	:=	Claude Code Switch
 APP_AUTHOR	:=	CommunityPoke
-APP_VERSION	:=	0.1.0
+APP_VERSION	:=	0.2.0
 
 #---------------------------------------------------------------------------------
 # options for code generation
@@ -43,7 +43,10 @@ CXXFLAGS	:= $(CFLAGS) -fno-rtti -fno-exceptions
 ASFLAGS	:=	-g $(ARCH)
 LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
 
-LIBS	:=	-lcurl -lmbedtls -lmbedx509 -lmbedcrypto -lz -lnx
+LIBS	:=	-lcurl -lmbedtls -lmbedx509 -lmbedcrypto \
+		-lSDL2_ttf -lfreetype -lbz2 -lpng16 -lz -lharfbuzz \
+		-lSDL2 -lEGL -lGLESv2 -lglapi -ldrm_nouveau -lstdc++ -lm \
+		-lpthread -lnx
 
 #---------------------------------------------------------------------------------
 # list of directories containing libraries, this must be the top level containing
